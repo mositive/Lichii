@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <cstdio>
 #include <span>
@@ -230,9 +231,47 @@ bool DmaPusher::Step() {
         // Recheck even when the wait returns at once: a writer may have finished (and marked the
         // pages) since the check above.
         if (!gpu_written && VideoCommon::GpuSplit::Get().Active()) {
-            VideoCommon::GpuSplit::Get().WaitForWriters();
+            // EDEN_NX2_LIST_WRITERS_SKIP=1 (experiment, off by default): once no command list
+            // has been found on a GPU-written page for the first two minutes, stop waiting for
+            // the queued dispatches and copies before every entry. Ocarina of Time waits here
+            // ~5,600 times a second (~250 ms a second of the front). Pages the GPU wrote earlier
+            // are still caught by IsGpuWrittenCommands; only a command list that a dispatch still
+            // queued on the back is about to write would be read stale. The first GPU-written
+            // command list ever seen turns the skip off for good.
+            static const bool skip_list_writers = [] {
+                const char* value = std::getenv("EDEN_NX2_LIST_WRITERS_SKIP");
+                return value != nullptr && value[0] == '1';
+            }();
+            static const auto first_entry = std::chrono::steady_clock::now();
+            static u64 stat_entries{}, stat_waited{}, stat_found{}, stat_skipped{};
+            static auto stat_window = first_entry;
+            ++stat_entries;
+            const bool learned = std::chrono::steady_clock::now() - first_entry >
+                                 std::chrono::seconds{120};
+            if (skip_list_writers && learned &&
+                !Tegra::g_nx2_has_command_list_pages.load(std::memory_order_relaxed)) {
+                ++stat_skipped;
+            } else {
+                if (VideoCommon::GpuSplit::Get().WaitForWriters()) {
+                    ++stat_waited;
+                }
+            }
             gpu_written =
                 IsGpuWrittenCommands(dma_state.dma_get, size_t{header.size} * sizeof(u32));
+            if (gpu_written) {
+                ++stat_found;
+            }
+            if (const auto now = std::chrono::steady_clock::now();
+                now - stat_window > std::chrono::seconds{10}) {
+                LOG_INFO(HW_GPU,
+                         "List writers (10 s): {} entries, {} waited, {} skipped, {} on GPU-written "
+                         "pages, command list pages seen: {}, skip {}",
+                         stat_entries, stat_waited, stat_skipped, stat_found,
+                         Tegra::g_nx2_has_command_list_pages.load(std::memory_order_relaxed),
+                         skip_list_writers ? (learned ? "on" : "learning") : "off");
+                stat_entries = stat_waited = stat_found = stat_skipped = 0;
+                stat_window = now;
+            }
         }
         // Resume and GPU-written entries need live words, even after a flush cleared dirty state.
         const bool submitted = (command_list.snapshot_suspensions & 1) == 0 &&
