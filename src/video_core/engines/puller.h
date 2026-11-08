@@ -82,6 +82,7 @@ public:
         u32 operation;
         std::chrono::steady_clock::time_point since;
         bool reported;
+        u32 polls{}; ///< EDEN_NX2_ACQUIRE_FAST_POLL: polls so far (every 16th drains)
 
         [[nodiscard]] bool Matches(u32 current) const;
     };

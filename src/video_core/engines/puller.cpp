@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: 2022 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include <chrono>
 #include <atomic>
 #include <cstdlib>
 
@@ -125,6 +126,43 @@ bool Puller::PendingAcquire::Matches(u32 current) const {
 bool Puller::CanResumeAcquire(DmaPusher& dma_pusher) {
     if (!pending_acquire) {
         return true;
+    }
+    // EDEN_NX2_ACQUIRE_FAST_POLL=1 (experiment, off by default): a waiting acquire is polled
+    // about a dozen times before it is met (Ocarina of Time: ~4,000 polls a second), and every
+    // poll drained the back. When no queued work writes the word (StableSemaphore: no tracked
+    // write to it, no untracked write since the back's position, not GPU-written), guest memory
+    // already holds its value, so the poll reads it without a drain. Every 16th poll still takes
+    // the drained path below, as do words the fast path can't read.
+    static const bool fast_poll = [] {
+        const char* value = std::getenv("EDEN_NX2_ACQUIRE_FAST_POLL");
+        return value != nullptr && value[0] == '1';
+    }();
+    if (fast_poll && VideoCommon::GpuSplit::Get().Active()) {
+        static u64 stat_fast{}, stat_fast_met{}, stat_drained{};
+        static auto stat_window = std::chrono::steady_clock::now();
+        if (const auto now = std::chrono::steady_clock::now();
+            now - stat_window > std::chrono::seconds{10}) {
+            LOG_INFO(HW_GPU, "Acquire polls (10 s): {} without a drain ({} met), {} drained",
+                     stat_fast, stat_fast_met, stat_drained);
+            stat_fast = stat_fast_met = stat_drained = 0;
+            stat_window = now;
+        }
+        if (Nx2SemaphoreWaiters::Get().Latched(this)) {
+            ++stat_fast;
+            ++stat_fast_met;
+            return true;
+        }
+        if ((++pending_acquire->polls % 16) != 0 &&
+            StableSemaphore(dma_pusher, pending_acquire->address)) {
+            ++stat_fast;
+            if (pending_acquire->Matches(
+                    dma_pusher.memory_manager.Read<u32>(pending_acquire->address))) {
+                ++stat_fast_met;
+                return true;
+            }
+            return false;
+        }
+        ++stat_drained;
     }
     // The release may still be queued for the split GPU thread's back half (and the caches
     // ReadSemaphoreWord asks are its state).
