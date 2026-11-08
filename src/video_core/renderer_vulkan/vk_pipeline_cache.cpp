@@ -813,8 +813,9 @@ GraphicsPipeline* PipelineCache::CurrentGraphicsPipeline() {
                 attribute_masks[stage] = shader_infos[stage]->vertex_attribute_mask;
             }
         }
-        graphics_key.state.attribute_types = VideoCommon::KeyedAttributeTypes(
-            vertex_attribute_types, graphics_key.unique_hashes, attribute_masks);
+        // Yerel derleme: anahtar maskeleme kapali, v54 shader cache'iyle ayni anahtarlar.
+        static_cast<void>(attribute_masks);
+        graphics_key.state.attribute_types = vertex_attribute_types;
     }
 
     if (current_pipeline) {
