@@ -114,6 +114,7 @@ void BufferCache<P>::TickFrame() {
         return;
     }
     runtime.TickFrame(slot_buffers);
+    native_indirect_pages_this_frame.clear();
     if (frame_tick % 600 == 0 && !uploaded_buffer_ranges.empty()) {
         for (const auto& [address, size] : uploaded_buffer_ranges) {
             device_memory.HintCold(address, size);
@@ -1493,7 +1494,17 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32 
         }
         const DAddr first_page = Common::AlignDown(device_addr, Core::DEVICE_PAGESIZE);
         const DAddr end = device_addr + check_size;
+        // EDEN_NX2_BANK_CHECK_FRAME=1 (experiment): compare each page once a frame instead of on
+        // every bind (cheaper on the GPU thread; per-draw rewrites within a frame may be missed,
+        // which showed as single-frame white flashes in Ocarina of Time).
+        static const bool check_once_a_frame = [] {
+            const char* value = std::getenv("EDEN_NX2_BANK_CHECK_FRAME");
+            return value != nullptr && value[0] == '1';
+        }();
         for (DAddr page = first_page; page < end; page += Core::DEVICE_PAGESIZE) {
+            if (check_once_a_frame && !native_indirect_pages_this_frame.insert(page).second) {
+                continue;
+            }
             const u8* const guest = device_memory.template GetPointer<u8>(page);
             if (guest == nullptr) {
                 continue;

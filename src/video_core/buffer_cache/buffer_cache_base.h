@@ -482,6 +482,8 @@ public:
     /// unchanged pages keep their tracking (marking them CPU-modified costs two mprotect calls
     /// per page).
     std::unordered_map<DAddr, std::array<u8, Core::DEVICE_PAGESIZE>> native_indirect_page_snapshots;
+    /// EDEN_NX2_BANK_CHECK_FRAME=1: bank pages already checked this frame (checked once a frame).
+    std::unordered_set<DAddr> native_indirect_pages_this_frame;
 
 private:
     template <typename Mask, typename Func>
