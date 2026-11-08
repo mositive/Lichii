@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include "video_core/nx2_live.h"
 #include "video_core/buffer_cache/uniform_cache_history.h"
 
 #include <algorithm>
@@ -348,11 +349,8 @@ std::optional<VideoCore::RasterizerDownloadArea> BufferCache<P>::GetFlushArea(DA
     // A preflushable mark persists and downloads later GPU writes at every fence. Native titles
     // instead keep read traps and flush on demand, unless EDEN_NX2_PREFLUSH=1 opts them into
     // preflushing too (Ocarina of Time: far fewer Finish stalls, but some flicker).
-    static const bool nx2_preflush = [] {
-        const char* value = std::getenv("EDEN_NX2_PREFLUSH");
-        return value != nullptr && value[0] == '1';
-    }();
-    const bool preflush = nx2_preflush || !Tegra::g_nx2_ampere.load(std::memory_order_relaxed);
+    static VideoCommon::Nx2Live::Flag nx2_preflush{"EDEN_NX2_PREFLUSH"};
+    const bool preflush = nx2_preflush.Get() || !Tegra::g_nx2_ampere.load(std::memory_order_relaxed);
     if (!area->preemtive) {
         if (Nx2DownloadTrace::g_enabled) [[unlikely]] {
             Nx2DownloadTrace::Marked(device_addr_start_aligned,
@@ -1497,10 +1495,8 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32 
         // EDEN_NX2_BANK_CHECK_FRAME=1 (experiment): compare each page once a frame instead of on
         // every bind (cheaper on the GPU thread; per-draw rewrites within a frame may be missed,
         // which showed as single-frame white flashes in Ocarina of Time).
-        static const bool check_once_a_frame = [] {
-            const char* value = std::getenv("EDEN_NX2_BANK_CHECK_FRAME");
-            return value != nullptr && value[0] == '1';
-        }();
+        static VideoCommon::Nx2Live::Flag bank_check_frame{"EDEN_NX2_BANK_CHECK_FRAME"};
+        const bool check_once_a_frame = bank_check_frame.Get();
         for (DAddr page = first_page; page < end; page += Core::DEVICE_PAGESIZE) {
             if (check_once_a_frame && !native_indirect_pages_this_frame.insert(page).second) {
                 continue;

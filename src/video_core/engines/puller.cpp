@@ -12,6 +12,7 @@
 #include "common/logging.h"
 #include "common/settings.h"
 #include "core/core.h"
+#include "video_core/nx2_live.h"
 #include "video_core/nx2_profile.h"
 #include "video_core/control/channel_state.h"
 #include "video_core/dma_pusher.h"
@@ -133,11 +134,8 @@ bool Puller::CanResumeAcquire(DmaPusher& dma_pusher) {
     // write to it, no untracked write since the back's position, not GPU-written), guest memory
     // already holds its value, so the poll reads it without a drain. Every 16th poll still takes
     // the drained path below, as do words the fast path can't read.
-    static const bool fast_poll = [] {
-        const char* value = std::getenv("EDEN_NX2_ACQUIRE_FAST_POLL");
-        return value != nullptr && value[0] == '1';
-    }();
-    if (fast_poll && VideoCommon::GpuSplit::Get().Active()) {
+    static VideoCommon::Nx2Live::Flag fast_poll{"EDEN_NX2_ACQUIRE_FAST_POLL"};
+    if (fast_poll.Get() && VideoCommon::GpuSplit::Get().Active()) {
         static u64 stat_fast{}, stat_fast_met{}, stat_drained{};
         static auto stat_window = std::chrono::steady_clock::now();
         if (const auto now = std::chrono::steady_clock::now();

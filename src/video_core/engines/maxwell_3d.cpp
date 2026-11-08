@@ -19,6 +19,7 @@
 #include "common/settings.h"
 #include "core/core.h"
 #include "core/core_timing.h"
+#include "video_core/nx2_live.h"
 #include "video_core/dirty_flags.h"
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/engines/maxwell_3d.h"
@@ -1697,8 +1698,12 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
     // A read of reports the query cache still holds writes them out first, waiting for their
     // host results (Lichii #215), or the guest reads stale occlusion counts. The wait above ran
     // the queued reports the read may see, so the back has registered them.
+    // EDEN_NX2_STALE_QUERIES=1 (experiment): read pending occlusion reports as they are in
+    // guest memory (the last result written, usually a frame old) instead of waiting for the
+    // host GPU to finish them; the back stalled on those waits (~12% in Ocarina of Time).
+    static VideoCommon::Nx2Live::Flag stale_queries{"EDEN_NX2_STALE_QUERIES"};
     const bool reads_reports = [&] {
-        if (!shadow_words.empty() || words == 0) {
+        if (!shadow_words.empty() || words == 0 || stale_queries.Get()) {
             return false;
         }
         for (GPUVAddr begin = source; begin < source + read_bytes;) {

@@ -16,6 +16,7 @@
 #include "common/settings.h"
 #include "core/core.h"
 #include "core/memory.h"
+#include "video_core/nx2_live.h"
 #include "video_core/nx2_profile.h"
 #include "video_core/dma_pusher.h"
 #include "video_core/command_fetch_order.h"
@@ -237,10 +238,8 @@ bool DmaPusher::Step() {
             // ~5,600 times a second (~250 ms a second of the front). Pages the GPU wrote earlier
             // are still caught by IsGpuWrittenCommands; only a command list that a dispatch still
             // queued on the back is about to write would be read stale.
-            static const bool skip_list_writers = [] {
-                const char* value = std::getenv("EDEN_NX2_LIST_WRITERS_SKIP");
-                return value != nullptr && value[0] == '1';
-            }();
+            static VideoCommon::Nx2Live::Flag skip_list_writers_flag{"EDEN_NX2_LIST_WRITERS_SKIP"};
+            const bool skip_list_writers = skip_list_writers_flag.Get();
             static const auto first_entry = std::chrono::steady_clock::now();
             static u64 stat_entries{}, stat_waited{}, stat_found{}, stat_skipped{};
             static auto stat_window = first_entry;
