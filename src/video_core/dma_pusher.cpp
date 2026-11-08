@@ -231,13 +231,12 @@ bool DmaPusher::Step() {
         // Recheck even when the wait returns at once: a writer may have finished (and marked the
         // pages) since the check above.
         if (!gpu_written && VideoCommon::GpuSplit::Get().Active()) {
-            // EDEN_NX2_LIST_WRITERS_SKIP=1 (experiment, off by default): once no command list
-            // has been found on a GPU-written page for the first two minutes, stop waiting for
-            // the queued dispatches and copies before every entry. Ocarina of Time waits here
+            // EDEN_NX2_LIST_WRITERS_SKIP=1 (experiment, off by default): after the first two
+            // minutes, stop waiting for the queued dispatches and copies before entries on pages
+            // that never held a GPU-written command list. Ocarina of Time waits here
             // ~5,600 times a second (~250 ms a second of the front). Pages the GPU wrote earlier
             // are still caught by IsGpuWrittenCommands; only a command list that a dispatch still
-            // queued on the back is about to write would be read stale. The first GPU-written
-            // command list ever seen turns the skip off for good.
+            // queued on the back is about to write would be read stale.
             static const bool skip_list_writers = [] {
                 const char* value = std::getenv("EDEN_NX2_LIST_WRITERS_SKIP");
                 return value != nullptr && value[0] == '1';
@@ -248,8 +247,20 @@ bool DmaPusher::Step() {
             ++stat_entries;
             const bool learned = std::chrono::steady_clock::now() - first_entry >
                                  std::chrono::seconds{120};
-            if (skip_list_writers && learned &&
-                !Tegra::g_nx2_has_command_list_pages.load(std::memory_order_relaxed)) {
+            // Pages a GPU-written command list was ever read from (Nx2MarkCommandListPage) keep
+            // the wait; entries on every other page skip it.
+            const auto on_command_list_page = [&] {
+                const GPUVAddr begin = dma_state.dma_get;
+                const GPUVAddr end = begin + u64{header.size} * sizeof(u32);
+                for (GPUVAddr page = begin & ~GPUVAddr{0xfff}; page < end; page += 0x1000) {
+                    if (const auto device = memory_manager.GpuToCpuAddress(page);
+                        !device || Tegra::Nx2IsCommandListPage(*device)) {
+                        return true;
+                    }
+                }
+                return false;
+            };
+            if (skip_list_writers && learned && !on_command_list_page()) {
                 ++stat_skipped;
             } else {
                 if (VideoCommon::GpuSplit::Get().WaitForWriters()) {
